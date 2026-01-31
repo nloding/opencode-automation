@@ -48,6 +48,48 @@ interface RunOptions {
 type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>["client"];
 
 /**
+ * Extract detailed error information from an error, including nested causes.
+ * Node.js fetch errors often have a `cause` with the real error details.
+ */
+function formatErrorDetails(err: unknown, verbose: boolean): string {
+  const parts: string[] = [];
+
+  function extractError(e: unknown, depth: number): void {
+    if (depth > 3) return;
+
+    if (e instanceof Error) {
+      parts.push(depth === 0 ? e.message : `Caused by: ${e.message}`);
+
+      // Node.js system error properties (ECONNREFUSED, etc.)
+      const sysErr = e as { code?: string; syscall?: string; hostname?: string; port?: number };
+      if (sysErr.code) parts.push(`  Code: ${sysErr.code}`);
+      if (sysErr.syscall) parts.push(`  Syscall: ${sysErr.syscall}`);
+      if (sysErr.hostname) parts.push(`  Host: ${sysErr.hostname}:${sysErr.port ?? ""}`);
+
+      // Recurse into cause
+      if ("cause" in e && e.cause) {
+        extractError(e.cause, depth + 1);
+      }
+
+      if (verbose && depth === 0) {
+        console.log(`  [DEBUG] Exception type: ${e.constructor.name}`);
+        console.log(`  [DEBUG] Message: ${e.message}`);
+        if ("cause" in e && e.cause) {
+          console.log(`  [DEBUG] Cause:`, e.cause);
+        }
+      }
+    } else if (e !== null && typeof e === "object") {
+      parts.push(JSON.stringify(e));
+    } else {
+      parts.push(String(e));
+    }
+  }
+
+  extractError(err, 0);
+  return parts.join("\n  ");
+}
+
+/**
  * Run a single prompt and detect success/failure.
  * Each prompt runs in a new session.
  */
@@ -133,13 +175,8 @@ async function runPrompt(
       errorType: ERROR_TYPE_NONE,
       resultText,
     };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    if (verbose) {
-      console.log(`  [DEBUG] Exception type: ${error?.constructor?.name}`);
-      console.log(`  [DEBUG] Exception message: ${errorMessage}`);
-    }
+  } catch (err) {
+    const errorMessage = formatErrorDetails(err, verbose);
 
     return {
       success: false,
