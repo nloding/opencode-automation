@@ -1,0 +1,3 @@
+Read the README.md and summarize the project structure.
+
+Then identify the main entry points and explain how the application works.

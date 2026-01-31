@@ -1,0 +1,3 @@
+Run the build and tests for this project.
+
+Report any errors, warnings, or failing tests.

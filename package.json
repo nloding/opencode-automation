@@ -1,0 +1,28 @@
+{
+  "name": "opencode-automation",
+  "version": "1.0.0",
+  "description": "CLI tool for running multiple OpenCode prompts sequentially with error detection",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "opencode-automation": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.1.23",
+    "commander": "^12.1.0",
+    "natural-orderby": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
