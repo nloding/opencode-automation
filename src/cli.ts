@@ -6,7 +6,7 @@
  * with automatic error detection and early termination on failure.
  */
 
-import { createOpencode } from "@opencode-ai/sdk";
+import { createOpencodeClient } from "@opencode-ai/sdk";
 import { Command } from "commander";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, basename } from "node:path";
@@ -18,16 +18,6 @@ const ERROR_TYPE_TOOL = "tool"; // A tool returned an error (e.g., test failure)
 const ERROR_TYPE_SDK = "sdk"; // SDK/process crash - always fatal
 
 type ErrorType = typeof ERROR_TYPE_NONE | typeof ERROR_TYPE_TOOL | typeof ERROR_TYPE_SDK;
-
-// Default allowed tools for common development workflows
-const DEFAULT_ALLOWED_TOOLS = [
-  "Read", // Read file contents
-  "Write", // Write/create files
-  "Edit", // Edit existing files
-  "Bash", // Run shell commands
-  "Glob", // Find files by pattern
-  "Grep", // Search file contents
-];
 
 interface RunPromptResult {
   success: boolean;
@@ -45,7 +35,7 @@ interface RunOptions {
 }
 
 // Type for the OpenCode client
-type OpencodeClient = Awaited<ReturnType<typeof createOpencode>>["client"];
+type OpencodeClient = ReturnType<typeof createOpencodeClient>;
 
 /**
  * Extract detailed error information from an error, including nested causes.
@@ -201,9 +191,6 @@ async function runPrompt(
 interface SequentialRunOptions extends RunOptions {
   stopOnSdkError: boolean;
   stopOnToolError: boolean;
-  allowedTools?: string[];
-  workingDir?: string;
-  maxTurns?: number;
 }
 
 interface RunSummary {
@@ -213,93 +200,60 @@ interface RunSummary {
 }
 
 /**
- * Run multiple prompts sequentially.
- * Creates a single OpenCode instance and reuses the client for all prompts.
+ * Run multiple prompts sequentially using the provided client.
  */
 async function runPromptsSequential(
+  client: OpencodeClient,
   prompts: PromptEntry[],
   options: SequentialRunOptions
 ): Promise<RunSummary> {
-  const { stopOnSdkError, stopOnToolError, allowedTools, workingDir, verbose } = options;
-  const toolsToUse = allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+  const { stopOnSdkError, stopOnToolError, verbose } = options;
 
   let completed = 0;
   let toolErrors = 0;
   let sdkErrors = 0;
 
-  // Build config for OpenCode instance
-  const config: Record<string, unknown> = {};
-  if (workingDir) {
-    config.cwd = workingDir;
-  }
-  if (toolsToUse.length > 0) {
-    config.allowedTools = toolsToUse;
-  }
+  for (let i = 0; i < prompts.length; i++) {
+    const { name, content } = prompts[i];
+    const promptNum = i + 1;
 
-  // Create a single OpenCode instance for all prompts
-  let opencode;
-  try {
-    opencode = await createOpencode({ config });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to create OpenCode instance: ${errorMessage}`);
-    return { completed: 0, toolErrors: 0, sdkErrors: prompts.length };
-  }
+    console.log(`\n[${promptNum}/${prompts.length}] Running: ${name}`);
+    console.log(`  ${content.slice(0, 80)}${content.length > 80 ? "..." : ""}`);
+    console.log("-".repeat(60));
 
-  const { client } = opencode;
+    const result = await runPrompt(client, content, { verbose });
 
-  try {
-    for (let i = 0; i < prompts.length; i++) {
-      const { name, content } = prompts[i];
-      const promptNum = i + 1;
-
-      console.log(`\n[${promptNum}/${prompts.length}] Running: ${name}`);
-      console.log(`  ${content.slice(0, 80)}${content.length > 80 ? "..." : ""}`);
-      console.log("-".repeat(60));
-
-      const result = await runPrompt(client, content, { verbose });
-
-      // Print result (truncated if very long)
-      if (result.resultText) {
-        const displayText =
-          result.resultText.length > 500
-            ? result.resultText.slice(0, 500) + "..."
-            : result.resultText;
-        console.log(`\nResult:\n${displayText}`);
-      }
-
-      if (result.errorType === ERROR_TYPE_SDK) {
-        sdkErrors++;
-        console.log(`\n[SDK ERROR] ${name} failed due to SDK/process error.`);
-        if (stopOnSdkError) {
-          console.log("Stopping due to SDK error (always fatal).");
-          break;
-        }
-      } else if (result.errorType === ERROR_TYPE_TOOL) {
-        toolErrors++;
-        console.log(
-          `\n[TOOL ERROR] ${name} completed but a tool reported an error (e.g., test failure).`
-        );
-        if (stopOnToolError) {
-          console.log("Stopping due to tool error (--stop-on-tool-error is enabled).");
-          break;
-        } else {
-          // Tool errors are non-fatal by default, count as completed
-          completed++;
-        }
-      } else {
-        completed++;
-        console.log(`\n[OK] ${name} completed successfully.`);
-      }
+    // Print result (truncated if very long)
+    if (result.resultText) {
+      const displayText =
+        result.resultText.length > 500
+          ? result.resultText.slice(0, 500) + "..."
+          : result.resultText;
+      console.log(`\nResult:\n${displayText}`);
     }
-  } finally {
-    // Clean up the OpenCode instance
-    if ("close" in opencode && typeof opencode.close === "function") {
-      try {
-        await opencode.close();
-      } catch {
-        // Ignore cleanup errors
+
+    if (result.errorType === ERROR_TYPE_SDK) {
+      sdkErrors++;
+      console.log(`\n[SDK ERROR] ${name} failed due to SDK/process error.`);
+      if (stopOnSdkError) {
+        console.log("Stopping due to SDK error (always fatal).");
+        break;
       }
+    } else if (result.errorType === ERROR_TYPE_TOOL) {
+      toolErrors++;
+      console.log(
+        `\n[TOOL ERROR] ${name} completed but a tool reported an error (e.g., test failure).`
+      );
+      if (stopOnToolError) {
+        console.log("Stopping due to tool error (--stop-on-tool-error is enabled).");
+        break;
+      } else {
+        // Tool errors are non-fatal by default, count as completed
+        completed++;
+      }
+    } else {
+      completed++;
+      console.log(`\n[OK] ${name} completed successfully.`);
     }
   }
 
@@ -349,6 +303,8 @@ async function main(): Promise<void> {
     .name("opencode-automation")
     .description("Run OpenCode prompts sequentially with error detection.")
     .argument("[prompts...]", "Prompts to run (if not using --file or --dir)")
+    .requiredOption("-u, --url <url>", "OpenCode server URL (e.g., http://localhost:4096)")
+    .option("-p, --password <password>", "OpenCode server password")
     .option("-d, --dir <path>", "Directory containing prompt files")
     .option("-f, --file <path>", "Single file containing a prompt")
     .option(
@@ -360,43 +316,25 @@ async function main(): Promise<void> {
       "--no-stop-on-sdk-error",
       "Continue execution even after SDK/process errors (not recommended)"
     )
-    .option(
-      "--tools <list>",
-      `Comma-separated list of allowed tools (default: ${DEFAULT_ALLOWED_TOOLS.join(",")})`
-    )
-    .option("--no-tools", "Disable all tools (text-only mode)")
-    .option("--working-dir <path>", "Working directory for OpenCode")
-    .option("--max-turns <number>", "Maximum number of agentic turns per prompt")
     .option("-v, --verbose", "Enable verbose output", false)
     .addHelpText(
       "after",
       `
 Examples:
   # Run prompts from command line
-  npx tsx src/cli.ts "First prompt" "Second prompt" "Third prompt"
+  npx tsx src/cli.ts --url http://localhost:4096 "First prompt" "Second prompt"
 
   # Run prompts from a directory (one prompt per file, alphabetical order)
-  npx tsx src/cli.ts --dir ./prompts/
+  npx tsx src/cli.ts --url http://localhost:4096 --dir ./prompts/
 
   # Run a single prompt from a file
-  npx tsx src/cli.ts --file prompt.txt
+  npx tsx src/cli.ts --url http://localhost:4096 --file prompt.txt
+
+  # Connect with password
+  npx tsx src/cli.ts --url http://localhost:4096 --password secret --dir ./prompts/
 
   # Stop if a tool returns an error
-  npx tsx src/cli.ts --dir ./prompts/ --stop-on-tool-error
-
-  # Override default tools with specific set
-  npx tsx src/cli.ts --dir ./prompts/ --tools "Read,Edit,Bash"
-
-  # Disable all tools (text-only mode)
-  npx tsx src/cli.ts "Explain this concept" --no-tools
-
-Default allowed tools: ${DEFAULT_ALLOWED_TOOLS.join(", ")}
-  - Read:  Read file contents
-  - Write: Write/create files
-  - Edit:  Edit existing files
-  - Bash:  Run shell commands
-  - Glob:  Find files by pattern
-  - Grep:  Search file contents
+  npx tsx src/cli.ts --url http://localhost:4096 --dir ./prompts/ --stop-on-tool-error
 
 Error handling:
   - SDK errors (connection failures, process crashes): Always stop by default
@@ -408,13 +346,12 @@ Error handling:
   program.parse();
 
   const opts = program.opts<{
+    url: string;
+    password?: string;
     dir?: string;
     file?: string;
     stopOnToolError: boolean;
     stopOnSdkError: boolean;
-    tools?: string;
-    workingDir?: string;
-    maxTurns?: string;
     verbose: boolean;
   }>();
   const args = program.args;
@@ -463,31 +400,27 @@ Error handling:
   const stopOnSdkError = opts.stopOnSdkError !== false;
   const stopOnToolError = opts.stopOnToolError;
 
-  let allowedTools: string[] | undefined;
-  if ("tools" in opts && opts.tools === undefined) {
-    // --no-tools was used
-    allowedTools = [];
-  } else if (opts.tools) {
-    allowedTools = opts.tools.split(",").map((t) => t.trim());
-  }
-
-  const maxTurns = opts.maxTurns ? parseInt(opts.maxTurns, 10) : undefined;
-
+  console.log(`Connecting to OpenCode server: ${opts.url}`);
   console.log(`Running ${prompts.length} prompt(s) sequentially...`);
   console.log(`  Stop on SDK error: ${stopOnSdkError}`);
   console.log(`  Stop on tool error: ${stopOnToolError}`);
-  const toolsDisplay = allowedTools ?? DEFAULT_ALLOWED_TOOLS;
-  console.log(`  Allowed tools: ${toolsDisplay.join(", ") || "(none)"}`);
+
+  // Create client to connect to existing OpenCode server
+  const clientConfig: { baseUrl: string; password?: string } = {
+    baseUrl: opts.url,
+  };
+  if (opts.password) {
+    clientConfig.password = opts.password;
+  }
+  const client = createOpencodeClient(clientConfig);
 
   // Run prompts
   const { completed, toolErrors, sdkErrors } = await runPromptsSequential(
+    client,
     prompts,
     {
       stopOnSdkError,
       stopOnToolError,
-      allowedTools,
-      workingDir: opts.workingDir,
-      maxTurns,
       verbose: opts.verbose,
     }
   );

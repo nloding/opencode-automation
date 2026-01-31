@@ -4,7 +4,7 @@ A CLI tool for running multiple OpenCode prompts sequentially, with automatic er
 
 ## What it does
 
-This TypeScript CLI uses the `@opencode-ai/sdk` to run multiple prompts one after another. Each prompt runs in a new session, and sessions are closed after completion. Useful for automating repetitive multi-step tasks.
+This TypeScript CLI uses the `@opencode-ai/sdk` to connect to a running OpenCode server and run multiple prompts one after another. Each prompt runs in a new session, and sessions are closed after completion. Useful for automating repetitive multi-step tasks.
 
 ## Installation
 
@@ -12,7 +12,7 @@ This TypeScript CLI uses the `@opencode-ai/sdk` to run multiple prompts one afte
 npm install
 ```
 
-Also requires OpenCode to be installed and configured.
+Requires an OpenCode server to be running.
 
 ## Usage
 
@@ -23,50 +23,43 @@ npm run build
 
 Run prompts from command line:
 ```bash
-node dist/cli.js "First prompt" "Second prompt" "Third prompt"
+node dist/cli.js --url http://localhost:4096 "First prompt" "Second prompt"
 ```
 
 Run prompts from a directory (one prompt per file, naturally sorted):
 ```bash
-node dist/cli.js --dir ./prompts-example/
+node dist/cli.js --url http://localhost:4096 --dir ./prompts-example/
 ```
 
 Run a single prompt from a file:
 ```bash
-node dist/cli.js --file prompt.txt
+node dist/cli.js --url http://localhost:4096 --file prompt.txt
+```
+
+Connect with password:
+```bash
+node dist/cli.js --url http://localhost:4096 --password secret --dir ./prompts/
 ```
 
 ### Development
 
 Run directly with tsx (no build required):
 ```bash
-npm run dev -- "First prompt" "Second prompt"
-npm run dev -- --dir ./prompts-example/
+npm run dev -- --url http://localhost:4096 "First prompt" "Second prompt"
+npm run dev -- --url http://localhost:4096 --dir ./prompts-example/
 ```
 
 ### Options
 
 | Flag | Description |
 |------|-------------|
+| `-u, --url <url>` | OpenCode server URL (required) |
+| `-p, --password <password>` | OpenCode server password (optional) |
 | `-d, --dir <path>` | Directory containing prompt files |
 | `-f, --file <path>` | Single file containing a prompt |
 | `--stop-on-tool-error` | Stop when a tool returns an error (default: continue) |
 | `--no-stop-on-sdk-error` | Continue even after SDK/process errors (not recommended) |
-| `--tools <list>` | Comma-separated list of allowed tools |
-| `--no-tools` | Disable all tools (text-only mode) |
-| `--working-dir <path>` | Working directory for OpenCode |
-| `--max-turns <number>` | Max agentic turns per prompt |
 | `-v, --verbose` | Enable verbose output |
-
-### Default Tools
-
-The following tools are enabled by default:
-- `Read` - Read file contents
-- `Write` - Write/create files
-- `Edit` - Edit existing files
-- `Bash` - Run shell commands
-- `Glob` - Find files by pattern
-- `Grep` - Search file contents
 
 ### Error Handling
 
