@@ -6,7 +6,7 @@
  * with automatic error detection and early termination on failure.
  */
 
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { Command } from "commander";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, basename } from "node:path";
@@ -30,12 +30,14 @@ interface PromptEntry {
   content: string;
 }
 
+interface ClientConfig {
+  baseUrl: string;
+  password?: string;
+}
+
 interface RunOptions {
   verbose: boolean;
 }
-
-// Type for the OpenCode client
-type OpencodeClient = ReturnType<typeof createOpencodeClient>;
 
 /**
  * Extract detailed error information from an error, including nested causes.
@@ -81,20 +83,23 @@ function formatErrorDetails(err: unknown, verbose: boolean): string {
 
 /**
  * Run a single prompt and detect success/failure.
- * Each prompt runs in a new session.
+ * Each prompt runs in a new session with a fresh client connection.
  */
 async function runPrompt(
-  client: OpencodeClient,
+  clientConfig: ClientConfig,
   prompt: string,
   options: RunOptions
 ): Promise<RunPromptResult> {
   const { verbose } = options;
   let sessionId: string | undefined;
 
+  // Create a fresh client for each prompt to avoid connection state issues
+  const client = createOpencodeClient(clientConfig);
+
   try {
     // Create a new session for this prompt
     const sessionResponse = await client.session.create({
-      body: { title: `Prompt: ${prompt.slice(0, 50)}...` },
+      title: `Prompt: ${prompt.slice(0, 50)}...`
     });
 
     // Handle SDK response structure
@@ -117,10 +122,8 @@ async function runPrompt(
 
     // Send the prompt
     const promptResponse = await client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        parts: [{ type: "text", text: prompt }],
-      },
+      sessionID: sessionId,
+      parts: [{ type: "text", text: prompt }],
     });
 
     if (verbose) {
@@ -177,10 +180,12 @@ async function runPrompt(
     // Close the session after the prompt completes
     if (sessionId) {
       try {
-        await client.session.delete({ path: { id: sessionId } });
+        await client.session.delete({ sessionID: sessionId });
         if (verbose) {
           console.log(`  [DEBUG] Closed session: ${sessionId}`);
         }
+        // Give the server time to clean up after session deletion
+        await sleep(500);
       } catch {
         // Ignore session cleanup errors
       }
@@ -188,9 +193,17 @@ async function runPrompt(
   }
 }
 
+/**
+ * Sleep for the specified number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface SequentialRunOptions extends RunOptions {
   stopOnSdkError: boolean;
   stopOnToolError: boolean;
+  delayBetweenPrompts: number;
 }
 
 interface RunSummary {
@@ -200,14 +213,14 @@ interface RunSummary {
 }
 
 /**
- * Run multiple prompts sequentially using the provided client.
+ * Run multiple prompts sequentially, creating a fresh client for each.
  */
 async function runPromptsSequential(
-  client: OpencodeClient,
+  clientConfig: ClientConfig,
   prompts: PromptEntry[],
   options: SequentialRunOptions
 ): Promise<RunSummary> {
-  const { stopOnSdkError, stopOnToolError, verbose } = options;
+  const { stopOnSdkError, stopOnToolError, delayBetweenPrompts, verbose } = options;
 
   let completed = 0;
   let toolErrors = 0;
@@ -217,11 +230,19 @@ async function runPromptsSequential(
     const { name, content } = prompts[i];
     const promptNum = i + 1;
 
+    // Add delay between prompts (not before the first one)
+    if (i > 0 && delayBetweenPrompts > 0) {
+      if (verbose) {
+        console.log(`  [DEBUG] Waiting ${delayBetweenPrompts}ms before next prompt...`);
+      }
+      await sleep(delayBetweenPrompts);
+    }
+
     console.log(`\n[${promptNum}/${prompts.length}] Running: ${name}`);
     console.log(`  ${content.slice(0, 80)}${content.length > 80 ? "..." : ""}`);
     console.log("-".repeat(60));
 
-    const result = await runPrompt(client, content, { verbose });
+    const result = await runPrompt(clientConfig, content, { verbose });
 
     // Print result (truncated if very long)
     if (result.resultText) {
@@ -316,6 +337,11 @@ async function main(): Promise<void> {
       "--no-stop-on-sdk-error",
       "Continue execution even after SDK/process errors (not recommended)"
     )
+    .option(
+      "--delay <ms>",
+      "Delay in milliseconds between prompts (default: 1000)",
+      "1000"
+    )
     .option("-v, --verbose", "Enable verbose output", false)
     .addHelpText(
       "after",
@@ -352,6 +378,7 @@ Error handling:
     file?: string;
     stopOnToolError: boolean;
     stopOnSdkError: boolean;
+    delay: string;
     verbose: boolean;
   }>();
   const args = program.args;
@@ -399,28 +426,30 @@ Error handling:
   // Parse options
   const stopOnSdkError = opts.stopOnSdkError !== false;
   const stopOnToolError = opts.stopOnToolError;
+  const delayBetweenPrompts = parseInt(opts.delay, 10);
 
-  console.log(`Connecting to OpenCode server: ${opts.url}`);
+  console.log(`OpenCode server: ${opts.url}`);
   console.log(`Running ${prompts.length} prompt(s) sequentially...`);
   console.log(`  Stop on SDK error: ${stopOnSdkError}`);
   console.log(`  Stop on tool error: ${stopOnToolError}`);
+  console.log(`  Delay between prompts: ${delayBetweenPrompts}ms`);
 
-  // Create client to connect to existing OpenCode server
-  const clientConfig: { baseUrl: string; password?: string } = {
+  // Client config - a fresh client is created for each prompt
+  const clientConfig: ClientConfig = {
     baseUrl: opts.url,
   };
   if (opts.password) {
     clientConfig.password = opts.password;
   }
-  const client = createOpencodeClient(clientConfig);
 
   // Run prompts
   const { completed, toolErrors, sdkErrors } = await runPromptsSequential(
-    client,
+    clientConfig,
     prompts,
     {
       stopOnSdkError,
       stopOnToolError,
+      delayBetweenPrompts,
       verbose: opts.verbose,
     }
   );

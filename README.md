@@ -59,6 +59,7 @@ npm run dev -- --url http://localhost:4096 --dir ./prompts-example/
 | `-f, --file <path>` | Single file containing a prompt |
 | `--stop-on-tool-error` | Stop when a tool returns an error (default: continue) |
 | `--no-stop-on-sdk-error` | Continue even after SDK/process errors (not recommended) |
+| `--delay <ms>` | Delay between prompts in milliseconds (default: 1000) |
 | `-v, --verbose` | Enable verbose output |
 
 ### Error Handling
